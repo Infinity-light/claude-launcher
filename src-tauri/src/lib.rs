@@ -36,6 +36,8 @@ pub fn run() {
             commands::installer::start_installation,
             commands::installer::open_path,
             commands::installer::detect_all,
+            commands::workflow::update_workflow_kit,
+            commands::workflow::get_workflow_kit_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

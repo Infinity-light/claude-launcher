@@ -247,6 +247,205 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
     Ok(())
 }
 
+/// 更新 Workflow Kit 到最新版本
+#[tauri::command]
+pub async fn update_workflow_kit() -> Result<StepResult, String> {
+    tokio::task::spawn_blocking(update_workflow_kit_sync)
+        .await
+        .map_err(|e| format!("任务执行失败: {:?}", e))
+}
+
+fn update_workflow_kit_sync() -> StepResult {
+    let plugin_dir = get_plugin_dir();
+    let tmp_dir = std::env::temp_dir().join("workflow-kit-update");
+
+    // 1. 清理临时目录
+    if tmp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    // 2. 确保 git 可用
+    if which::which("git").is_err() {
+        return StepResult {
+            name: "Workflow Kit 更新".to_string(),
+            status: "error".to_string(),
+            message: "需要 Git 但未找到".to_string(),
+            version: None,
+        };
+    }
+
+    // 3. 克隆最新代码
+    let clone_status = Command::new("git")
+        .args([
+            "clone",
+            "--depth", "1",
+            "--branch", "master",
+            "https://github.com/Infinity-light/Cytopia-claude-code-workkit-plugin.git",
+            tmp_dir.to_str().unwrap(),
+        ])
+        .status();
+
+    match clone_status {
+        Ok(status) if !status.success() => {
+            return StepResult {
+                name: "Workflow Kit 更新".to_string(),
+                status: "error".to_string(),
+                message: "git clone 失败，请检查网络连接".to_string(),
+                version: None,
+            };
+        }
+        Err(e) => {
+            return StepResult {
+                name: "Workflow Kit 更新".to_string(),
+                status: "error".to_string(),
+                message: format!("执行 git clone 失败: {}", e),
+                version: None,
+            };
+        }
+        Ok(_) => {}
+    }
+
+    // 4. 备份旧版本
+    let backup_dir = get_claude_dir()
+        .join("plugins")
+        .join("cache")
+        .join("infinity-workflows")
+        .join("workflow-kit")
+        .join(format!("2.1.0-backup-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+
+    if plugin_dir.exists() {
+        if let Err(e) = std::fs::rename(&plugin_dir, &backup_dir) {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return StepResult {
+                name: "Workflow Kit 更新".to_string(),
+                status: "error".to_string(),
+                message: format!("备份旧版本失败: {}", e),
+                version: None,
+            };
+        }
+    }
+
+    // 5. 创建新目录并复制文件
+    if let Err(e) = std::fs::create_dir_all(&plugin_dir) {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return StepResult {
+            name: "Workflow Kit 更新".to_string(),
+            status: "error".to_string(),
+            message: format!("创建目录失败: {}", e),
+            version: None,
+        };
+    }
+
+    let src_dir = tmp_dir.join("plugins").join("workflow-kit");
+
+    // 复制 skills
+    let skills_src = src_dir.join("skills");
+    if skills_src.exists() {
+        if let Err(e) = copy_dir_recursive(&skills_src, &plugin_dir.join("skills")) {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return StepResult {
+                name: "Workflow Kit 更新".to_string(),
+                status: "error".to_string(),
+                message: format!("复制 skills 失败: {}", e),
+                version: None,
+            };
+        }
+    }
+
+    // 复制 CLAUDE.md
+    let claude_md_src = src_dir.join("CLAUDE.md");
+    if claude_md_src.exists() {
+        if let Err(e) = std::fs::copy(&claude_md_src, &plugin_dir.join("CLAUDE.md")) {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return StepResult {
+                name: "Workflow Kit 更新".to_string(),
+                status: "error".to_string(),
+                message: format!("复制 CLAUDE.md 失败: {}", e),
+                version: None,
+            };
+        }
+    }
+
+    // 6. 更新 installed_plugins.json 中的时间戳
+    let _ = update_installed_plugins_timestamp();
+
+    // 7. 清理临时目录
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    StepResult {
+        name: "Workflow Kit 更新".to_string(),
+        status: "done".to_string(),
+        message: "已更新到最新版本".to_string(),
+        version: Some("2.1.0".to_string()),
+    }
+}
+
+/// 获取当前 Workflow Kit 版本信息
+#[tauri::command]
+pub fn get_workflow_kit_info() -> serde_json::Value {
+    let plugin_dir = get_plugin_dir();
+    let installed = plugin_dir.exists()
+        && plugin_dir.join("skills").exists()
+        && plugin_dir.join("CLAUDE.md").exists();
+
+    // 获取最后更新时间（从 installed_plugins.json）
+    let last_updated = get_plugin_last_updated().unwrap_or_else(|| "未知".to_string());
+
+    serde_json::json!({
+        "installed": installed,
+        "version": if installed { "2.1.0" } else { null },
+        "lastUpdated": last_updated,
+        "path": plugin_dir.to_string_lossy().to_string(),
+    })
+}
+
+fn get_plugin_last_updated() -> Option<String> {
+    let config_file = get_claude_dir().join("plugins").join("installed_plugins.json");
+    if let Ok(content) = std::fs::read_to_string(&config_file) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(plugins) = json.get("plugins") {
+                if let Some(workflow_kit) = plugins.get("workflow-kit@infinity-workflows") {
+                    if let Some(installs) = workflow_kit.as_array() {
+                        if let Some(first) = installs.first() {
+                            return first.get("lastUpdated")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn update_installed_plugins_timestamp() -> Result<(), String> {
+    let config_file = get_claude_dir().join("plugins").join("installed_plugins.json");
+
+    if let Ok(content) = std::fs::read_to_string(&config_file) {
+        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+            let now = chrono::Utc::now().to_rfc3339();
+
+            if let Some(plugins) = json.get_mut("plugins") {
+                if let Some(workflow_kit) = plugins.get_mut("workflow-kit@infinity-workflows") {
+                    if let Some(installs) = workflow_kit.as_array_mut() {
+                        for install in installs.iter_mut() {
+                            if let Some(obj) = install.as_object_mut() {
+                                obj.insert("lastUpdated".to_string(), serde_json::json!(now));
+                            }
+                        }
+                    }
+                }
+            }
+
+            std::fs::write(&config_file, serde_json::to_string_pretty(&json).unwrap())
+                .map_err(|e| format!("写入配置失败: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
 /// 主安装函数
 pub async fn install_workflow_kit(_os: &str) -> StepResult {
     let os = _os.to_string();

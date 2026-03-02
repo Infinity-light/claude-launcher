@@ -26,13 +26,54 @@ UI layout:
 -->
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { exit } from '@tauri-apps/plugin-process'
 import { useInstallerStore } from '../stores/installer'
 import { STEP_DEFINITIONS } from '../types'
 
 const store = useInstallerStore()
+
+// Workflow Kit update state
+const workflowInfo = ref<{ installed: boolean; version: string | null; lastUpdated: string } | null>(null)
+const isUpdating = ref(false)
+const updateResult = ref<{ success: boolean; message: string } | null>(null)
+
+onMounted(async () => {
+  await loadWorkflowInfo()
+})
+
+async function loadWorkflowInfo() {
+  try {
+    const info = await invoke('get_workflow_kit_info') as { installed: boolean; version: string | null; lastUpdated: string }
+    workflowInfo.value = info
+  } catch (e) {
+    console.error('Failed to get workflow kit info:', e)
+  }
+}
+
+async function updateWorkflowKit() {
+  if (isUpdating.value) return
+  isUpdating.value = true
+  updateResult.value = null
+
+  try {
+    const result = await invoke('update_workflow_kit') as { status: string; message: string }
+    updateResult.value = {
+      success: result.status === 'done',
+      message: result.message
+    }
+    // Reload info after update
+    await loadWorkflowInfo()
+  } catch (e) {
+    updateResult.value = {
+      success: false,
+      message: '更新失败: ' + String(e)
+    }
+  } finally {
+    isUpdating.value = false
+  }
+}
 
 const isFullSuccess = computed(() => {
   return store.result ? store.result.error_count === 0 : false
@@ -182,8 +223,42 @@ const stepResults = computed(() => {
       </div>
     </div>
 
+    <!-- Workflow Kit update section -->
+    <div class="px-8 py-3 border-t border-gray-800">
+      <div class="bg-gradient-to-r from-blue-900/20 to-indigo-900/20 rounded-lg border border-blue-800/40 p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <h3 class="text-sm font-semibold text-gray-200">Workflow Kit — 工作流套件</h3>
+              <span v-if="workflowInfo?.installed" class="px-1.5 py-0.5 text-[10px] bg-green-900/50 text-green-400 rounded border border-green-800/50">
+                已安装
+              </span>
+            </div>
+            <p class="mt-1 text-xs text-gray-500 leading-relaxed">
+              包含 discovery、planning、execution 等 14 个技能的完整工作流套件。
+              点击更新可从 GitHub 获取最新版本。
+            </p>
+            <p v-if="workflowInfo?.lastUpdated" class="mt-1.5 text-xs text-gray-600">
+              最后更新: {{ workflowInfo.lastUpdated }}
+            </p>
+            <p v-if="updateResult" class="mt-2 text-xs" :class="updateResult.success ? 'text-green-400' : 'text-red-400'">
+              {{ updateResult.message }}
+            </p>
+          </div>
+          <button
+            @click="updateWorkflowKit"
+            :disabled="isUpdating"
+            class="shrink-0 px-4 py-2 text-xs bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors flex items-center gap-2"
+          >
+            <span v-if="isUpdating" class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+            {{ isUpdating ? '更新中...' : '检查更新' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- CCSwitch guide section -->
-    <div class="px-8 py-4 border-t border-gray-800">
+    <div class="px-8 py-3 border-t border-gray-800">
       <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <div class="flex items-start justify-between gap-4">
           <div class="flex-1 min-w-0">
