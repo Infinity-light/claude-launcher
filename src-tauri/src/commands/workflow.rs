@@ -44,7 +44,8 @@ fn get_plugin_dir() -> PathBuf {
 pub fn detect() -> DetectResult {
     let plugin_dir = get_plugin_dir();
     let installed = plugin_dir.exists()
-        && plugin_dir.join("skills").exists();
+        && plugin_dir.join("skills").exists()
+        && plugin_dir.join("CLAUDE.md").exists();
     DetectResult {
         name: "Workflow Kit".to_string(),
         installed,
@@ -164,6 +165,13 @@ fn install_manually() -> Result<(), String> {
     }
 
     copy_dir_recursive(&skills_src, &plugin_dir.join("skills"))?;
+
+    // 复制 CLAUDE.md（如果存在）
+    let claude_md_src = tmp_dir.join("plugins").join("workflow-kit").join("CLAUDE.md");
+    if claude_md_src.exists() {
+        std::fs::copy(&claude_md_src, &plugin_dir.join("CLAUDE.md"))
+            .map_err(|e| format!("复制 CLAUDE.md 失败: {}", e))?;
+    }
 
     // 写入 installed_plugins.json
     write_installed_plugins_config()?;

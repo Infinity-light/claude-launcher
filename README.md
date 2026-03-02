@@ -1,78 +1,53 @@
-# Claude 环境安装器
+# Claude Launcher
 
-跨平台一键式开发环境配置工具，自动安装 Claude Code 所需的全部依赖组件。
+Claude Code 环境一键安装器 - Tauri 桌面应用
 
-## 快速开始
+![App Cover](./src-tauri/assets/app-cover.png)
 
-```bash
-python install.py
+## 使用方法
+
+直接双击运行，无需安装：
+
+```
+Claude-Launcher.exe
 ```
 
-## 命令行选项
+## 功能
 
-| 参数 | 说明 |
-|------|------|
-| `--minimal` | 最小安装，仅安装核心组件 |
-| `--with-conda` | 包含 Miniconda 安装 |
-| `--with-workflow-kit` | 包含 workflow kit |
-| `--force` | 强制重新安装所有组件 |
-| `--yes` | 自动确认所有提示 |
+自动完成 7 步环境配置：
 
-## 安装组件
-
-- **Node.js** - Claude Code 运行时依赖
-- **Claude Code** - Claude CLI 工具
-- **Miniconda** (可选) - Python 环境管理
+1. **Git** - 检测或安装
+2. **Node.js** - 安装 LTS 版本
+3. **Miniconda** - Python 环境管理
+4. **Claude Code** - 官方 CLI 工具
+5. **Onboarding** - 配置文件写入
+6. **CCSwitch** - 版本管理工具
+7. **Workflow Kit** - Claude Code Plugin 工作流套件
 
 ## 系统要求
 
-- Python 3.9+
-- Windows 10+、macOS 12+、Ubuntu 20.04+
+- Windows 10+
+- macOS 12+
+- Ubuntu 20.04+
 
-## 示例
-
-```bash
-# 最小安装
-python install.py --minimal
-
-# 完整安装（含 Miniconda）
-python install.py --with-conda
-
-# 静默安装
-python install.py --yes
-
-# 强制重装
-python install.py --force
-```
-
-## 构建
+## 开发
 
 ```bash
-# 构建当前平台
-python build.py --platform windows
+# 安装依赖
+npm install
 
-# 构建所有平台
-python build.py --platform all
+# 开发模式
+npm run tauri:dev
+
+# 构建
+npm run tauri:build
 ```
 
-## 项目结构
+## 技术栈
 
-```
-claude-env-installer/
-├── install.py              # 入口脚本
-├── build.py                # 构建入口
-├── requirements.txt        # Python 依赖
-├── src/
-│   ├── core/               # 核心模块
-│   ├── installers/         # 各组件安装器
-│   ├── platform/           # 跨平台抽象
-│   └── utils/              # 工具模块
-├── build/
-│   ├── windows/            # Windows 构建
-│   ├── macos/              # macOS 构建
-│   └── linux/              # Linux 构建
-└── tests/                  # 测试代码
-```
+- **后端**: Rust + Tauri v2
+- **前端**: Vue 3 + TypeScript + Tailwind CSS
+- **状态管理**: Pinia
 
 ## 许可证
 
