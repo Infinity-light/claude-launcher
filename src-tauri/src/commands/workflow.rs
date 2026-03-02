@@ -391,9 +391,11 @@ pub fn get_workflow_kit_info() -> serde_json::Value {
     // 获取最后更新时间（从 installed_plugins.json）
     let last_updated = get_plugin_last_updated().unwrap_or_else(|| "未知".to_string());
 
+    let version = if installed { Some("2.1.0") } else { None };
+
     serde_json::json!({
         "installed": installed,
-        "version": if installed { "2.1.0" } else { null },
+        "version": version,
         "lastUpdated": last_updated,
         "path": plugin_dir.to_string_lossy().to_string(),
     })
