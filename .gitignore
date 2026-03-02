@@ -1,0 +1,34 @@
+# Node
+node_modules/
+dist/
+
+# Rust
+target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Python (old files)
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.pyc
+
+# Build artifacts (keep only the setup exe)
+*.exe
+!Claude-Launcher-Setup.exe
+
+# Tauri gen files (optional, can be regenerated)
+src-tauri/gen/
