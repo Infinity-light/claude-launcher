@@ -3,202 +3,306 @@
  * role: Node.js LTS 检测与安装，支持 Windows / macOS / Linux
  * depends:
  *   - ../types.rs
+ *   - ./process.rs
  * exports:
  *   - ensure_node
+ *   - detect
  * status: IMPLEMENTED
  * functions:
+ *   - detect_node_version() -> Option<String>
+ *     检测 Node.js 是否已安装：
+ *       1. 固定路径检测：C:\Program Files\nodejs\node.exe（Windows）
+ *       2. PATH 检测：运行 `node --version`
+ *     返回版本字符串或 None
+ *
  *   - ensure_node(os: &str, arch: &str) -> StepResult
- *     1. 检测：运行 `node --version`，已安装则返回 StepResult{status: "skipped"}
+ *     1. 检测：调用 detect_node_version()，已安装则返回 StepResult{status: "skipped"}
  *     2. 安装（如未安装）：
  *        Windows: winget install --id OpenJS.NodeJS.LTS -e --source winget --silent
  *        macOS:   下载 .pkg 安装包 installer -pkg <file> -target /（或 brew install node@lts）
  *        Linux:   curl NodeSource 脚本 | bash，然后 apt-get install nodejs
- *     3. Windows/macOS 需要刷新 PATH 后重新检测 node --version
+ *     3. 安装后：重新检测 node --version（即使 PATH 未刷新也尝试固定路径）
  *     4. 失败返回 StepResult{status: "error"}
  *
  *   - get_node_lts_pkg_url(arch: &str) -> String
  *     根据 arch 拼接 nodejs.org 官方 LTS 下载 URL（x64/arm64）
+ *
+ *   - detect() -> DetectResult
+ *     供前端检测页面调用，返回 Node.js 安装状态
  * ---
  */
 
-use crate::types::StepResult;
-use std::process::Command;
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
 
-/// 运行 `node --version` 并返回版本字符串，失败则返回 None。
-fn detect_node_version() -> Option<String> {
-    if which::which("node").is_err() {
-        return None;
-    }
-    let output = Command::new("node").arg("--version").output().ok()?;
-    if output.status.success() {
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Some(raw)
-    } else {
-        None
-    }
+use crate::types::{DetectResult, StepResult};
+
+use super::process::{command, output_text, summarize_output};
+#[cfg(target_os = "linux")]
+use super::process::error_text;
+
+const MIN_NODE_MAJOR: u32 = 18;
+
+fn parse_node_major(version: &str) -> Option<u32> {
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|v| v.parse::<u32>().ok())
 }
 
-/// 根据 arch 返回 nodejs.org 上 LTS .pkg 安装包的直链 URL（供 macOS 使用）。
-fn get_node_lts_pkg_url(arch: &str) -> String {
-    // Node.js 22 LTS (Jod) 稳定版
-    match arch {
-        "arm64" => "https://nodejs.org/dist/v22.12.0/node-v22.12.0-darwin-arm64.tar.gz".to_string(),
-        _ => "https://nodejs.org/dist/v22.12.0/node-v22.12.0.pkg".to_string(),
-    }
+fn is_supported_node(version: &str) -> bool {
+    parse_node_major(version)
+        .map(|major| major >= MIN_NODE_MAJOR)
+        .unwrap_or(false)
 }
 
-/// macOS：优先 brew，brew 不可用则下载 .pkg 安装。
-fn install_node_macos(arch: &str) -> Result<(), String> {
-    // 先尝试 brew（Homebrew 在 macOS 上最常见）
-    let brew_status = Command::new("sh")
-        .args(["-c", "brew install node@22"])
-        .status();
-
-    if let Ok(s) = brew_status {
-        if s.success() {
-            return Ok(());
-        }
-    }
-
-    // 回退：下载官方 .pkg 并用 installer 安装（仅 x64 有 .pkg；arm64 使用 tar.gz 不在此简化范围内，
-    // 但为保证流程完整仍保留下载 + installer 路径）
-    let pkg_url = get_node_lts_pkg_url(arch);
-    let cmd = format!(
-        "curl -fsSL '{}' -o /tmp/node.pkg && installer -pkg /tmp/node.pkg -target /",
-        pkg_url
-    );
-
-    let status = Command::new("sh").args(["-c", &cmd]).status();
-
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!(
-            "macOS .pkg 安装 Node.js 失败，退出码: {}",
-            s.code().unwrap_or(-1)
-        )),
-        Err(e) => Err(format!("执行 installer 命令失败: {}", e)),
-    }
-}
-
-/// Linux：NodeSource 脚本优先 apt，失败则尝试 rpm 路线（yum）。
-fn install_node_linux() -> Result<(), String> {
-    // 尝试 Debian/Ubuntu 路线（NodeSource + apt-get）
-    let apt_status = Command::new("sh")
-        .args([
-            "-c",
-            "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs",
-        ])
-        .status();
-
-    if let Ok(s) = apt_status {
-        if s.success() {
-            return Ok(());
-        }
-    }
-
-    // 回退：RHEL/CentOS/Fedora 路线（NodeSource + yum）
-    let rpm_status = Command::new("sh")
-        .args([
-            "-c",
-            "curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && yum install -y nodejs",
-        ])
-        .status();
-
-    match rpm_status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!(
-            "Linux NodeSource (rpm) 安装 Node.js 失败，退出码: {}",
-            s.code().unwrap_or(-1)
-        )),
-        Err(e) => Err(format!("执行 yum/NodeSource 命令失败: {}", e)),
-    }
-}
-
-pub async fn ensure_node(os: &str, arch: &str) -> StepResult {
-    let os = os.to_string();
-    let arch = arch.to_string();
-    tokio::task::spawn_blocking(move || ensure_node_sync(&os, &arch))
-        .await
-        .unwrap_or_else(|_| StepResult {
-            name: "Node.js".to_string(),
-            status: "error".to_string(),
-            message: "任务执行失败".to_string(),
-            version: None,
-        })
-}
-
-fn ensure_node_sync(os: &str, arch: &str) -> StepResult {
-    // 1. 检测是否已安装
-    if let Some(version) = detect_node_version() {
-        return StepResult {
-            name: "node".to_string(),
-            status: "skipped".to_string(),
-            message: format!("Node.js 已安装：{}", version),
-            version: Some(version),
-        };
-    }
-
-    // 2. 按平台执行安装
-    let install_result: Result<(), String> = match os {
-        "windows" => {
-            let status = Command::new("winget")
-                .args([
-                    "install",
-                    "--id",
-                    "OpenJS.NodeJS.LTS",
-                    "-e",
-                    "--source",
-                    "winget",
-                    "--silent",
-                    "--accept-package-agreements",
-                    "--accept-source-agreements",
-                ])
-                .status();
-            match status {
-                Ok(s) if s.success() => Ok(()),
-                Ok(s) => Err(format!(
-                    "winget install OpenJS.NodeJS.LTS 失败，退出码: {}",
-                    s.code().unwrap_or(-1)
-                )),
-                Err(e) => Err(format!("执行 winget 命令失败: {}", e)),
+/// 检测 Node.js 是否已安装
+pub fn detect_node_version() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let fixed_path = r"C:\Program Files\nodejs\node.exe";
+        if Path::new(fixed_path).exists() {
+            if let Ok(output) = command(fixed_path).arg("--version").output() {
+                if output.status.success() {
+                    return Some(output_text(&output.stdout));
+                }
             }
         }
-        "macos" => install_node_macos(arch),
-        "linux" => install_node_linux(),
-        other => Err(format!("不支持的操作系统: {}", other)),
-    };
-
-    if let Err(err_msg) = install_result {
-        return StepResult {
-            name: "node".to_string(),
-            status: "error".to_string(),
-            message: err_msg,
-            version: None,
-        };
     }
 
-    // 3. 安装后重新验证（Windows/macOS 安装后 PATH 可能需要新进程才能感知）
+    if let Ok(output) = command("node").arg("--version").output() {
+        if output.status.success() {
+            return Some(output_text(&output.stdout));
+        }
+    }
+
+    None
+}
+
+/// 确保 Node.js 已安装
+pub fn ensure_node(_os: &str, _arch: &str) -> StepResult {
+    let step_name = "Node.js";
+
+    if let Some(version) = detect_node_version() {
+        if is_supported_node(&version) {
+            return StepResult {
+                name: step_name.to_string(),
+                status: "skipped".to_string(),
+                message: format!("Node.js already installed: {}", version),
+                version: Some(version),
+            };
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let check_installed = command("winget")
+            .args(["list", "--id", "OpenJS.NodeJS.LTS", "-e"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        let mut args = vec![
+            if check_installed { "upgrade" } else { "install" },
+            "--id",
+            "OpenJS.NodeJS.LTS",
+            "-e",
+            "--source",
+            "winget",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ];
+
+        if check_installed {
+            args.push("--include-unknown");
+        }
+
+        let output = command("winget")
+            .args(args.as_slice())
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!(
+                        "Failed to install or upgrade Node.js via winget: {}",
+                        summarize_output(&out)
+                    ),
+                    version: None,
+                };
+            }
+            Err(e) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!("Failed to run winget: {}", e),
+                    version: None,
+                };
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = command("brew").args(["install", "node@lts"]).output();
+
+        match output {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!("Failed to install Node.js via brew: {}", summarize_output(&out)),
+                    version: None,
+                };
+            }
+            Err(e) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!("Failed to run brew: {}", e),
+                    version: None,
+                };
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let curl_output = command("curl")
+            .args(["-fsSL", "https://deb.nodesource.com/setup_lts.x"])
+            .output();
+
+        match curl_output {
+            Ok(output) if output.status.success() => {
+                let bash_result = command("bash")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin.write_all(&output.stdout)?;
+                        }
+                        child.wait_with_output()
+                    });
+
+                match bash_result {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => {
+                        return StepResult {
+                            name: step_name.to_string(),
+                            status: "error".to_string(),
+                            message: format!("Failed to setup NodeSource: {}", summarize_output(&out)),
+                            version: None,
+                        };
+                    }
+                    Err(e) => {
+                        return StepResult {
+                            name: step_name.to_string(),
+                            status: "error".to_string(),
+                            message: format!("Failed to execute NodeSource setup: {}", e),
+                            version: None,
+                        };
+                    }
+                }
+
+                let apt_output = command("apt-get").args(["install", "-y", "nodejs"]).output();
+
+                match apt_output {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => {
+                        return StepResult {
+                            name: step_name.to_string(),
+                            status: "error".to_string(),
+                            message: format!("Failed to install Node.js via apt: {}", summarize_output(&out)),
+                            version: None,
+                        };
+                    }
+                    Err(e) => {
+                        return StepResult {
+                            name: step_name.to_string(),
+                            status: "error".to_string(),
+                            message: format!("Failed to run apt-get: {}", e),
+                            version: None,
+                        };
+                    }
+                }
+            }
+            Ok(output) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!("Failed to download NodeSource setup script: {}", error_text(&output)),
+                    version: None,
+                };
+            }
+            Err(e) => {
+                return StepResult {
+                    name: step_name.to_string(),
+                    status: "error".to_string(),
+                    message: format!("Failed to run curl for NodeSource setup: {}", e),
+                    version: None,
+                };
+            }
+        }
+    }
+
     match detect_node_version() {
-        Some(version) => StepResult {
-            name: "node".to_string(),
+        Some(version) if is_supported_node(&version) => StepResult {
+            name: step_name.to_string(),
             status: "done".to_string(),
-            message: format!("Node.js 安装成功：{}", version),
+            message: format!("Node.js ready: {}", version),
+            version: Some(version),
+        },
+        Some(version) => StepResult {
+            name: step_name.to_string(),
+            status: "error".to_string(),
+            message: format!(
+                "Node.js version too old after installation: {} (requires >= v{})",
+                version, MIN_NODE_MAJOR
+            ),
             version: Some(version),
         },
         None => StepResult {
-            name: "node".to_string(),
+            name: step_name.to_string(),
             status: "error".to_string(),
-            message: "Node.js 安装命令执行成功，但安装后仍无法检测到 node --version，请重启终端后重试".to_string(),
+            message: "Node.js installation completed but verification failed".to_string(),
             version: None,
         },
     }
 }
 
-pub fn detect() -> crate::types::DetectResult {
-    let version = detect_node_version();
-    crate::types::DetectResult {
-        name: "Node.js".to_string(),
-        installed: version.is_some(),
-        version,
+/// 供前端检测页面调用
+pub fn detect() -> DetectResult {
+    match detect_node_version() {
+        Some(version) => {
+            if is_supported_node(&version) {
+                DetectResult {
+                    name: "Node.js".to_string(),
+                    installed: true,
+                    version: Some(version),
+                }
+            } else {
+                DetectResult {
+                    name: "Node.js".to_string(),
+                    installed: false,
+                    version: Some(format!("{} (requires >= v{})", version, MIN_NODE_MAJOR)),
+                }
+            }
+        }
+        None => DetectResult {
+            name: "Node.js".to_string(),
+            installed: false,
+            version: None,
+        },
     }
 }

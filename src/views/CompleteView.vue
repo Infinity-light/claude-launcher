@@ -83,8 +83,27 @@ const ccSwitchPath = computed(() => {
   // Try store.ccSwitchDownloadPath first
   if (store.ccSwitchDownloadPath) return store.ccSwitchDownloadPath
   // Fallback: parse from result steps[5].message
+  // Handle formats:
+  // - "CCSwitch 已下载到 C:\Users\...\CC-Switch-xxx.msi"
+  // - "已安装，跳过。安装包位置: C:\Users\..."
   if (store.result?.steps?.[5]?.message) {
     const msg = store.result.steps[5].message
+    // Try to extract path after "安装包位置: " or "已下载到 "
+    const locationMatch = msg.match(/(?:安装包位置:|已下载到)\s+(.+?)(?:\s*$|\.msi|\.zip|\.deb|\.AppImage)/i)
+    if (locationMatch) {
+      let fullPath = locationMatch[1].trim()
+      // If it's a file path, get the directory
+      const lastSep = Math.max(fullPath.lastIndexOf('/'), fullPath.lastIndexOf('\\'))
+      if (lastSep > 0) {
+        // Check if it ends with a filename (has extension)
+        const lastDot = fullPath.lastIndexOf('.', lastSep)
+        if (lastDot > lastSep || fullPath.match(/\.(msi|zip|deb|AppImage)$/i)) {
+          return fullPath.substring(0, lastSep)
+        }
+      }
+      return fullPath
+    }
+    // Fallback: try to match any Windows or Unix path
     const pathMatch = msg.match(/([A-Za-z]:[\\\/][^\s]+|\/[^\s]+)/)
     if (pathMatch) {
       const fullPath = pathMatch[1]
@@ -168,7 +187,7 @@ const stepResults = computed(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+  <div class="h-full bg-gray-950 text-gray-100 flex flex-col">
     <!-- Header -->
     <div class="px-8 pt-10 pb-5">
       <div class="flex items-center gap-4">
@@ -288,9 +307,14 @@ const stepResults = computed(() => {
     <!-- Footer -->
     <div class="px-8 pb-8 pt-3 flex items-center justify-between">
       <div class="text-sm text-gray-500">
-        在终端运行
-        <code class="ml-1 px-1.5 py-0.5 bg-gray-800 rounded text-gray-300 font-mono text-xs">claude</code>
-        开始使用
+        <div>
+          在终端运行
+          <code class="ml-1 px-1.5 py-0.5 bg-gray-800 rounded text-gray-300 font-mono text-xs">claude</code>
+          开始使用
+        </div>
+        <div class="mt-1 text-xs text-gray-600">
+          若 Windows 打开失败且提示缺少 WebView2，请先手动安装 Microsoft Edge WebView2 Runtime。
+        </div>
       </div>
       <button
         @click="handleExit"

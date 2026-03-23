@@ -1,15 +1,14 @@
 /**
  * ---
- * role: 安装主编排器，按序执行 7 个安装步骤，通过 Tauri 事件流式上报进度
+ * role: 安装主编排器，按序执行 6 个安装步骤，通过 Tauri 事件流式上报进度
  * depends:
  *   - ../types.rs
- *   - ./git.rs
  *   - ./node.rs
+ *   - ./git.rs
  *   - ./conda.rs
  *   - ./claude.rs
  *   - ./onboarding.rs
  *   - ./ccswitch.rs
- *   - ./workflow.rs
  * exports:
  *   - start_installation
  *   - open_path
@@ -17,13 +16,12 @@
  * functions:
  *   - start_installation(window: tauri::Window, os: String, arch: String) -> Result<InstallationResult, String>
  *     按序执行以下步骤（每步开始前 emit step-update{status: "running"}，结束后 emit step-update{status: done|skipped|error}）：
- *       0: git::ensure_git(&os)
- *       1: node::ensure_node(&os, &arch)
- *       2: conda::ensure_conda(&os, &arch)
- *       3: claude::ensure_claude(&os)
+ *       0: node::ensure_node(&os, &arch) - Node.js 优先安装（后续步骤依赖 Node 下载文件）
+ *       1: git::ensure_git(&os, &arch) - Git 使用 Node.js 下载安装程序
+ *       2: conda::ensure_conda(&os, &arch) - Miniconda 使用 Node.js 下载+清华镜像
+ *       3: claude::ensure_claude(&os) - Claude Code 最后安装（依赖 npm）
  *       4: onboarding::configure_onboarding()
  *       5: ccswitch::download_ccswitch(&os, &arch)
- *       6: workflow::install_workflow_kit(&os)
  *     步骤失败不中断，继续后续步骤
  *     全部完成后 emit installation-complete，并返回 InstallationResult
  *
@@ -35,199 +33,155 @@
  * ---
  */
 
-use tauri::{Window, Emitter};
 use crate::types::{InstallationResult, StepResult, StepUpdate};
-use crate::commands::{git, node, conda, claude, onboarding, ccswitch, workflow};
+use tauri::{Window, Emitter};
+use serde_json::json;
 
-const STEP_NAMES: [&str; 7] = [
-    "Git",
+// 各步骤模块
+use super::node;
+use super::git;
+use super::conda;
+use super::claude;
+use super::onboarding;
+use super::ccswitch;
+
+/// 步骤名称列表
+const STEP_NAMES: [&str; 6] = [
     "Node.js",
+    "Git",
     "Miniconda",
     "Claude Code",
     "Onboarding 配置",
     "CCSwitch",
-    "Workflow Kit",
 ];
 
+/// 按序执行 6 个安装步骤
 #[tauri::command]
-pub async fn start_installation(
-    window: Window,
-    os: String,
-    arch: String,
-) -> Result<InstallationResult, String> {
-    let mut steps: Vec<StepResult> = Vec::new();
+pub async fn start_installation(window: Window, os: String, arch: String) -> Result<InstallationResult, String> {
+    let mut results = vec![];
 
-    // Step 0: Git
-    window.emit("step-update", StepUpdate {
-        index: 0,
-        name: STEP_NAMES[0].to_string(),
-        status: "running".to_string(),
-        message: "正在安装 Git...".to_string(),
-        version: None,
-    }).ok();
-    let result = git::ensure_git(&os).await;
-    window.emit("step-update", StepUpdate {
-        index: 0,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    // Step 0: Node.js
+    emit_step_update(&window, 0, "running", None);
+    let result = node::ensure_node(&os, &arch);
+    emit_step_result(&window, 0, &result);
+    results.push(result);
 
-    // Step 1: Node.js
-    window.emit("step-update", StepUpdate {
-        index: 1,
-        name: STEP_NAMES[1].to_string(),
-        status: "running".to_string(),
-        message: "正在安装 Node.js...".to_string(),
-        version: None,
-    }).ok();
-    let result = node::ensure_node(&os, &arch).await;
-    window.emit("step-update", StepUpdate {
-        index: 1,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    // Step 1: Git
+    emit_step_update(&window, 1, "running", None);
+    let result = git::ensure_git(&os, &arch);
+    emit_step_result(&window, 1, &result);
+    results.push(result);
 
     // Step 2: Miniconda
-    window.emit("step-update", StepUpdate {
-        index: 2,
-        name: STEP_NAMES[2].to_string(),
-        status: "running".to_string(),
-        message: "正在安装 Miniconda...".to_string(),
-        version: None,
-    }).ok();
-    let result = conda::ensure_conda(&os, &arch).await;
-    window.emit("step-update", StepUpdate {
-        index: 2,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    emit_step_update(&window, 2, "running", None);
+    let result = conda::ensure_conda(&os, &arch);
+    emit_step_result(&window, 2, &result);
+    results.push(result);
 
     // Step 3: Claude Code
-    window.emit("step-update", StepUpdate {
-        index: 3,
-        name: STEP_NAMES[3].to_string(),
-        status: "running".to_string(),
-        message: "正在安装 Claude Code...".to_string(),
-        version: None,
-    }).ok();
-    let result = claude::ensure_claude(&os).await;
-    window.emit("step-update", StepUpdate {
-        index: 3,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    emit_step_update(&window, 3, "running", None);
+    let result = claude::ensure_claude(&os);
+    emit_step_result(&window, 3, &result);
+    results.push(result);
 
     // Step 4: Onboarding 配置
-    window.emit("step-update", StepUpdate {
-        index: 4,
-        name: STEP_NAMES[4].to_string(),
-        status: "running".to_string(),
-        message: "正在配置 Onboarding...".to_string(),
-        version: None,
-    }).ok();
+    emit_step_update(&window, 4, "running", None);
     let result = onboarding::configure_onboarding().await;
-    window.emit("step-update", StepUpdate {
-        index: 4,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    emit_step_result(&window, 4, &result);
+    results.push(result);
 
     // Step 5: CCSwitch
-    window.emit("step-update", StepUpdate {
-        index: 5,
-        name: STEP_NAMES[5].to_string(),
-        status: "running".to_string(),
-        message: "正在下载 CCSwitch...".to_string(),
-        version: None,
-    }).ok();
+    emit_step_update(&window, 5, "running", None);
     let result = ccswitch::download_ccswitch(&os, &arch).await;
-    window.emit("step-update", StepUpdate {
-        index: 5,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
+    emit_step_result(&window, 5, &result);
+    results.push(result);
 
-    // Step 6: Workflow Kit
-    window.emit("step-update", StepUpdate {
-        index: 6,
-        name: STEP_NAMES[6].to_string(),
-        status: "running".to_string(),
-        message: "正在安装 Workflow Kit...".to_string(),
-        version: None,
-    }).ok();
-    let result = workflow::install_workflow_kit(&os).await;
-    window.emit("step-update", StepUpdate {
-        index: 6,
-        name: result.name.clone(),
-        status: result.status.clone(),
-        message: result.message.clone(),
-        version: result.version.clone(),
-    }).ok();
-    steps.push(result);
-
-    // Tally results
-    let success_count = steps.iter().filter(|s| s.status == "done").count();
-    let skip_count = steps.iter().filter(|s| s.status == "skipped").count();
-    let error_count = steps.iter().filter(|s| s.status == "error").count();
+    // 计算统计
+    let success_count = results.iter().filter(|r| r.status == "done").count();
+    let skip_count = results.iter().filter(|r| r.status == "skipped").count();
+    let error_count = results.iter().filter(|r| r.status == "error").count();
 
     let installation_result = InstallationResult {
-        steps,
+        steps: results,
         success_count,
         skip_count,
         error_count,
     };
 
-    window.emit("installation-complete", &installation_result).ok();
+    // 发射完成事件
+    let _ = window.emit("installation-complete", json!({
+        "steps": &installation_result.steps,
+        "success_count": installation_result.success_count,
+        "skip_count": installation_result.skip_count,
+        "error_count": installation_result.error_count,
+    }));
 
     Ok(installation_result)
 }
 
-#[tauri::command]
-pub async fn open_path(path: String) -> Result<(), String> {
-    let status = if cfg!(target_os = "windows") {
-        std::process::Command::new("explorer").arg(&path).status()
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(&path).status()
-    } else {
-        std::process::Command::new("xdg-open").arg(&path).status()
+/// 发射步骤更新事件
+fn emit_step_update(window: &Window, step: usize, status: &str, message: Option<&str>) {
+    let update = StepUpdate {
+        index: step,
+        name: STEP_NAMES[step].to_string(),
+        status: status.to_string(),
+        message: message.unwrap_or("").to_string(),
+        version: None,
     };
-    match status {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("打开路径失败: {}", e)),
-    }
+    let _ = window.emit("step-update", &update);
 }
 
+/// 根据 StepResult 发射步骤结果事件
+fn emit_step_result(window: &Window, step: usize, result: &StepResult) {
+    let update = StepUpdate {
+        index: step,
+        name: STEP_NAMES[step].to_string(),
+        status: result.status.clone(),
+        message: result.message.clone(),
+        version: result.version.clone(),
+    };
+    let _ = window.emit("step-update", &update);
+}
+
+/// 检测所有组件状态
 #[tauri::command]
-pub async fn detect_all(os: String, arch: String) -> Vec<crate::types::DetectResult> {
-    tokio::task::spawn_blocking(move || {
-        vec![
-            git::detect(),
-            node::detect(),
-            conda::detect(&os),
-            claude::detect(),
-            onboarding::detect(),
-            ccswitch::detect(&os, &arch),
-            workflow::detect(),
-        ]
-    })
-    .await
-    .unwrap_or_default()
+pub async fn detect_all(os: String, arch: String) -> Result<Vec<crate::types::DetectResult>, String> {
+    Ok(vec![
+        node::detect(),
+        git::detect(),
+        conda::detect(),
+        claude::detect(),
+        onboarding::detect(),
+        ccswitch::detect(&os, &arch),
+    ])
+}
+
+/// 用系统默认方式打开文件/目录
+#[tauri::command]
+pub async fn open_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {}", e))?;
+    }
+
+    Ok(())
 }

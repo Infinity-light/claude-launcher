@@ -4,33 +4,36 @@
  * depends:
  *   - ./detect.rs
  *   - ./installer.rs
- *   - ./git.rs
  *   - ./node.rs
+ *   - ./git.rs
  *   - ./conda.rs
  *   - ./claude.rs
  *   - ./onboarding.rs
  *   - ./ccswitch.rs
- *   - ./workflow.rs
+ *   - ./download.rs
+ *   - ./process.rs
  * exports:
  *   - detect
  *   - installer
- *   - git
  *   - node
+ *   - git
  *   - conda
  *   - claude
  *   - onboarding
  *   - ccswitch
- *   - workflow
+ *   - download
+ *   - process
  * status: PENDING
  * ---
  */
 
 pub mod detect;
 pub mod installer;
-pub mod git;
 pub mod node;
+pub mod git;
 pub mod conda;
 pub mod claude;
 pub mod onboarding;
 pub mod ccswitch;
-pub mod workflow;
+pub mod download;
+pub mod process;

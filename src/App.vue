@@ -17,5 +17,7 @@ functions:
 </script>
 
 <template>
-  <router-view />
+  <div class="h-screen overflow-hidden">
+    <router-view />
+  </div>
 </template>

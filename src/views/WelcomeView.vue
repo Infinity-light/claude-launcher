@@ -14,7 +14,7 @@ functions:
       invoke get_system_info() → 写入 store.systemInfo
       显示 OS/架构信息
     显示 7 个步骤列表（固定顺序，带图标和描述）：
-      Git, Node.js, Miniconda, Claude Code, Onboarding配置, CCSwitch, Workflow Kit
+      Node.js, Git, Miniconda, Claude Code, Onboarding配置, CCSwitch, Workflow Kit
     点击"开始安装" → 导航到 /progress 并触发 store.startInstallation()
 
 UI layout:
@@ -62,7 +62,7 @@ async function handleStartInstallation() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+  <div class="h-full bg-gray-950 text-gray-100 flex flex-col">
     <!-- Header -->
     <div class="px-8 pt-10 pb-6">
       <h1 class="text-3xl font-bold text-white">Claude 环境安装程序</h1>
@@ -102,7 +102,7 @@ async function handleStartInstallation() {
 
     <!-- Footer -->
     <div class="px-8 py-6 border-t border-gray-800">
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between gap-6">
         <div class="text-sm text-gray-500">
           <span v-if="store.systemInfo">
             检测到系统：
@@ -111,6 +111,9 @@ async function handleStartInstallation() {
             <span class="text-gray-300 font-medium">{{ store.systemInfo.arch }}</span>
           </span>
           <span v-else class="text-gray-600">正在检测系统信息...</span>
+          <p class="mt-1 text-xs text-gray-600">
+            如果 Windows 首次启动提示缺少 WebView2，可先手动安装 Microsoft Edge WebView2 Runtime 后再重试。
+          </p>
         </div>
         <button
           @click="handleStartInstallation"

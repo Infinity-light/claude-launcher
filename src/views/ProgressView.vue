@@ -117,6 +117,32 @@ onMounted(async () => {
         step.version = update.version
       }
     }
+    // 提取 CCSwitch 路径（无论是 done 还是 skipped，只要是 CCSwitch 步骤）
+    if (update.index === 5 && (update.status === 'done' || update.status === 'skipped')) {
+      const msg = update.message
+      // Try to extract path after "安装包位置: " or "已下载到 "
+      const locationMatch = msg.match(/(?:安装包位置:|已下载到)\s+(.+?)(?:\s*$|\.msi|\.zip|\.deb|\.AppImage)/i)
+      if (locationMatch) {
+        let fullPath = locationMatch[1].trim()
+        const lastSep = Math.max(fullPath.lastIndexOf('/'), fullPath.lastIndexOf('\\'))
+        if (lastSep > 0) {
+          // Check if it ends with a filename (has extension in the last segment)
+          const lastSegment = fullPath.substring(lastSep + 1)
+          if (lastSegment.match(/\.(msi|zip|deb|AppImage)$/i)) {
+            fullPath = fullPath.substring(0, lastSep)
+          }
+        }
+        store.ccSwitchDownloadPath = fullPath
+      } else {
+        // Fallback: try to match any Windows or Unix path
+        const pathMatch = msg.match(/([A-Za-z]:[\\\/][^\s]+|\/[^\s]+)/)
+        if (pathMatch) {
+          const fullPath = pathMatch[1]
+          const lastSep = Math.max(fullPath.lastIndexOf('/'), fullPath.lastIndexOf('\\'))
+          store.ccSwitchDownloadPath = lastSep > 0 ? fullPath.substring(0, lastSep) : fullPath
+        }
+      }
+    }
   })
 
   unlistenComplete = await listen<InstallationResult>('installation-complete', (event) => {
@@ -161,7 +187,7 @@ watch(() => store.isComplete, (val) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+  <div class="h-full bg-gray-950 text-gray-100 flex flex-col">
     <!-- Header with progress bar -->
     <div class="px-8 pt-10 pb-6">
       <h1 class="text-2xl font-bold text-white">正在安装</h1>

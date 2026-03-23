@@ -43,7 +43,7 @@ pub fn detect(os: &str, arch: &str) -> crate::types::DetectResult {
         return crate::types::DetectResult {
             name: "CCSwitch".to_string(),
             installed: true,
-            version: None,
+            version: Some("已安装".to_string()),
         };
     }
     // 其次检查桌面/下载目录
@@ -65,15 +65,37 @@ pub fn detect(os: &str, arch: &str) -> crate::types::DetectResult {
     }
 }
 
+/// 获取 CCSwitch 安装包所在目录（用于前端显示）
+pub fn get_installer_dir(os: &str) -> Option<PathBuf> {
+    // 检查桌面/下载目录是否有安装包
+    let download_dir = get_download_dir(os);
+    if let Ok(entries) = std::fs::read_dir(&download_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with("cc-switch") {
+                return Some(download_dir.clone());
+            }
+        }
+    }
+    None
+}
+
 pub async fn download_ccswitch(os: &str, arch: &str) -> StepResult {
     // 检测是否已安装
     let det = detect(os, arch);
     if det.installed {
+        // 尝试获取安装包目录用于显示
+        let installer_dir = get_installer_dir(os);
+        let message = if let Some(dir) = installer_dir {
+            format!("已安装，跳过。安装包位置: {}", dir.display())
+        } else {
+            "已安装，跳过".to_string()
+        };
         return StepResult {
             name: "CCSwitch".to_string(),
             status: "skipped".to_string(),
-            message: "已安装，跳过".to_string(),
-            version: None,
+            message,
+            version: det.version,
         };
     }
 
